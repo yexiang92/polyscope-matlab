@@ -33,14 +33,9 @@ function build_mex()
         error('Build failed. Command: %s', buildCmd);
     end
 
-    % Locate the produced MEX file
-    if ispc
-        mexName = 'polyscope_mex.mexw64';
-    elseif ismac
-        mexName = 'polyscope_mex.mexmaci64';
-    else
-        mexName = 'polyscope_mex.mexa64';
-    end
+    % Locate the produced MEX file (works on Windows, macOS Intel, macOS
+    % Apple Silicon, and Linux).
+    mexName = ['polyscope_mex.' mexext];
     sourceMex = fullfile(buildDir, 'Release', mexName);
     if ~isfile(sourceMex)
         sourceMex = fullfile(buildDir, mexName);

@@ -14,13 +14,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         include:
           - os: ubuntu-latest
             cmake-flags: -DCMAKE_BUILD_TYPE=Release
             build-config: Release
           - os: windows-latest
             cmake-flags: -G "Visual Studio 17 2022" -A x64
+            build-config: Release
+          - os: macos-latest
+            cmake-flags: -DCMAKE_BUILD_TYPE=Release
             build-config: Release
 
     steps:

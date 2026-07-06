@@ -15,8 +15,10 @@ This repository contains **only** the MATLAB interface. The Polyscope C++ librar
 
 - MATLAB R2018a or newer with the C++ MEX API (`MatlabDataArray` / `cppmex`).
 - CMake ≥ 3.15.
-- A C++20 compiler (tested with Visual Studio 2022 on Windows).
+- A C++20 compiler (tested with Visual Studio 2022 on Windows; should work on Linux/macOS with GCC/Clang/Xcode).
 - Git with submodule support.
+
+The bindings are cross-platform: the same MATLAB source and C++ MEX code builds on Windows (`.mexw64`), Linux (`.mexa64`), and macOS (`.mexmaci64` / `.mexmaca64`). `build_mex.m` uses `mexext` to detect the correct MEX extension for the running MATLAB.
 
 ## Clone
 
@@ -32,7 +34,7 @@ git submodule update --init --recursive
 
 ## Build
 
-### From MATLAB (recommended on Windows)
+### From MATLAB (recommended)
 
 ```matlab
 cd('path/to/polyscope-matlab');
@@ -46,6 +48,12 @@ This configures CMake, builds `polyscope_mex`, and copies the MEX binary into `s
 ```bash
 cmake -S . -B build_matlab_mex -DBUILD_MATLAB_BINDINGS=ON
 cmake --build build_matlab_mex --target polyscope_mex --config Release
+```
+
+On macOS/Linux you may want to disable the GLFW backend if no display is available:
+
+```bash
+cmake -S . -B build_matlab_mex -DBUILD_MATLAB_BINDINGS=ON -DPOLYSCOPE_BACKEND_OPENGL3_GLFW=OFF
 ```
 
 The MEX binary will be copied automatically to `src/matlab/+polyscope/private/` as a post-build step.
