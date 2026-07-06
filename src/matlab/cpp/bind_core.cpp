@@ -4,6 +4,7 @@
 #include "polyscope/polyscope.h"
 #include "polyscope/view.h"
 #include "polyscope/options.h"
+#include "polyscope/pick.h"
 #include "imgui_internal.h"
 #include "polyscope/render/engine.h"
 #include "polyscope/messages.h"
@@ -52,10 +53,10 @@ void checkMinArgs(matlab::engine::MATLABEngine* matlabPtr, size_t actual, size_t
   }
 }
 
-// Replicate the camera/scene input handling that Polyscope's normal
-// mainLoopIteration() performs inside processInputEvents(). When the user
-// drives the render loop manually via frame_begin()/frame_end(), this
-// function is called so the 3D scene remains interactive (rotate, pan, zoom).
+// Replicate the input handling that Polyscope's normal mainLoopIteration()
+// performs inside processInputEvents(). When the user drives the render loop
+// manually via frame_begin()/frame_end(), this function is called so the 3D
+// scene remains interactive: rotate, pan, zoom, picking and selection.
 void processInputEventsSplitFrame() {
   if (!polyscope::options::doDefaultMouseInteraction) return;
 
@@ -64,6 +65,12 @@ void processInputEventsSplitFrame() {
   if (ImGui::IsAnyMouseDown()) {
     polyscope::requestRedraw();
   }
+
+  // Persistent state for picking/selection, mirroring Polyscope's internals.
+  static float dragDistSinceLastRelease = 0.0f;
+  static bool pendingPickActive = false;
+  static polyscope::PickResult pendingPickResult{};
+  static float pendingPickTime = 0.0f;
 
   if (!io.WantCaptureMouse) {
     // Scroll to zoom / shift clip plane
@@ -88,6 +95,7 @@ void processInputEventsSplitFrame() {
     if (dragLeft || dragRight) {
       glm::vec2 dragDelta{io.MouseDelta.x / polyscope::view::windowWidth,
                           -io.MouseDelta.y / polyscope::view::windowHeight};
+      dragDistSinceLastRelease += std::abs(dragDelta.x) + std::abs(dragDelta.y);
 
       bool isRotate = dragLeft && !io.KeyShift && !io.KeyCtrl;
       bool isTranslate = (dragLeft && io.KeyShift && !io.KeyCtrl) || dragRight;
@@ -108,6 +116,55 @@ void processInputEventsSplitFrame() {
         polyscope::view::processTranslate(dragDelta);
       }
     }
+
+    // === Picking / selection
+    float dragIgnoreThreshold = 0.01f;
+    bool anyModifierHeld = io.KeyShift || io.KeyCtrl || io.KeyAlt;
+    bool ctrlShiftHeld = io.KeyShift && io.KeyCtrl;
+
+    // Apply a pending pick once the double-click window has passed.
+    if (pendingPickActive) {
+      float elapsedSec = ImGui::GetTime() - pendingPickTime;
+      float pickDelaySec = io.MouseDoubleClickTime + 0.05f;
+      if (polyscope::haveSelection() || elapsedSec >= pickDelaySec) {
+        polyscope::setSelection(pendingPickResult);
+        pendingPickActive = false;
+      }
+    }
+
+    // Left click release with a single click -> pick at release location.
+    if (!anyModifierHeld && io.MouseReleased[0] && io.MouseClickedLastCount[0] == 1) {
+      if (dragDistSinceLastRelease < dragIgnoreThreshold) {
+        glm::vec2 screenCoords{io.MousePos.x, io.MousePos.y};
+        pendingPickResult = polyscope::pickAtScreenCoords(screenCoords);
+        pendingPickTime = ImGui::GetTime();
+        pendingPickActive = true;
+      }
+    }
+
+    // Right click release -> clear selection.
+    if (!anyModifierHeld && io.MouseReleased[1]) {
+      if (dragDistSinceLastRelease < dragIgnoreThreshold) {
+        polyscope::resetSelection();
+      }
+      dragDistSinceLastRelease = 0.0f;
+      pendingPickActive = false;
+    }
+
+    // Double-click left, or Ctrl+Shift left click -> recenter view at clicked point.
+    if ((io.MouseReleased[0] && io.MouseClickedLastCount[0] == 2) ||
+        (io.MouseReleased[0] && ctrlShiftHeld)) {
+      if (dragDistSinceLastRelease < dragIgnoreThreshold) {
+        glm::vec2 screenCoords{io.MousePos.x, io.MousePos.y};
+        polyscope::view::processSetCenter(screenCoords);
+        pendingPickActive = false;
+      }
+    }
+  }
+
+  // Reset drag distance after any left release.
+  if (io.MouseReleased[0]) {
+    dragDistSinceLastRelease = 0.0f;
   }
 
   if (!io.WantCaptureKeyboard) {
