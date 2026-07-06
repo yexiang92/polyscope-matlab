@@ -1,0 +1,59 @@
+compile_commands.json
+
+# Build directories
+build/
+build_debug/
+build_matlab_mex/
+build_python_check/
+dist/
+.cache
+
+# MATLAB MEX binaries copied into the package by the build
+src/matlab/+polyscope/private/*.mexw64
+src/matlab/+polyscope/private/*.mexmaci64
+src/matlab/+polyscope/private/*.mexa64
+
+# Generated state files
+imgui.ini
+.polyscope.ini
+
+# Editor and OS things
+.DS_Store
+.vscode
+*.swp
+tags
+*.blend1
+
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+build_log.txt
