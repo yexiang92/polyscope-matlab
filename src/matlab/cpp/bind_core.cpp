@@ -2,12 +2,17 @@
 #include "matlab_data_utils.h"
 
 #include "polyscope/polyscope.h"
+#include "polyscope/structure.h"
 #include "polyscope/view.h"
 #include "polyscope/options.h"
+#include "polyscope/internal.h"
 #include "polyscope/pick.h"
 #include "imgui_internal.h"
 #include "polyscope/render/engine.h"
+#include "polyscope/render/materials.h"
+#include "polyscope/render/color_maps.h"
 #include "polyscope/messages.h"
+#include "polyscope/imgui_config.h"
 #include "polyscope/widget.h"
 #include "polyscope/weak_handle.h"
 #include <glm/glm.hpp>
@@ -19,6 +24,26 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
+#include <cctype>
+#include <array>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
+#ifdef min
+#undef min
+#endif
+#ifdef max
+#undef max
+#endif
 
 // Forward declarations for Polyscope internals used in the split-frame API.
 namespace polyscope {
@@ -51,6 +76,71 @@ void checkMinArgs(matlab::engine::MATLABEngine* matlabPtr, size_t actual, size_t
     if (!msg.empty()) oss << ": " << msg;
     throwError(matlabPtr, oss.str());
   }
+}
+
+#ifdef _WIN32
+std::wstring utf8ToWide(const std::string& text) {
+  if (text.empty()) return std::wstring();
+  int count = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0);
+  if (count <= 0) {
+    count = MultiByteToWideChar(CP_ACP, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0);
+    if (count <= 0) return std::wstring(text.begin(), text.end());
+    std::wstring out(static_cast<size_t>(count), L'\0');
+    MultiByteToWideChar(CP_ACP, 0, text.c_str(), static_cast<int>(text.size()), out.data(), count);
+    return out;
+  }
+  std::wstring out(static_cast<size_t>(count), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), out.data(), count);
+  return out;
+}
+
+struct WindowTitleUpdate {
+  DWORD processId = 0;
+  std::wstring oldTitle;
+  std::wstring newTitle;
+  bool matched = false;
+};
+
+BOOL CALLBACK updateProcessWindowTitle(HWND hwnd, LPARAM param) {
+  WindowTitleUpdate* update = reinterpret_cast<WindowTitleUpdate*>(param);
+  DWORD windowProcessId = 0;
+  GetWindowThreadProcessId(hwnd, &windowProcessId);
+  if (windowProcessId != update->processId || !IsWindowVisible(hwnd)) return TRUE;
+
+  int len = GetWindowTextLengthW(hwnd);
+  if (len <= 0) return TRUE;
+  std::wstring title(static_cast<size_t>(len + 1), L'\0');
+  GetWindowTextW(hwnd, title.data(), len + 1);
+  title.resize(static_cast<size_t>(len));
+
+  if (title == update->oldTitle || title == L"Polyscope" || title == L"auto - by Yexiang Yan") {
+    SetWindowTextW(hwnd, update->newTitle.c_str());
+    update->matched = true;
+  }
+  return TRUE;
+}
+
+void setNativeProgramWindowTitle(const std::string& oldTitle, const std::string& newTitle) {
+  WindowTitleUpdate update;
+  update.processId = GetCurrentProcessId();
+  update.oldTitle = utf8ToWide(oldTitle);
+  update.newTitle = utf8ToWide(newTitle);
+  EnumWindows(updateProcessWindowTitle, reinterpret_cast<LPARAM>(&update));
+}
+#else
+void setNativeProgramWindowTitle(const std::string&, const std::string&) {}
+#endif
+
+polyscope::Structure* getStructureByName(matlab::engine::MATLABEngine* matlabPtr, const std::string& name) {
+  for (auto& catMap : polyscope::state::structures) {
+    for (auto& s : catMap.second) {
+      if (s.second->name == name) {
+        return s.second.get();
+      }
+    }
+  }
+  throwError(matlabPtr, "No structure with name: " + name);
+  return nullptr;
 }
 
 // Replicate the input handling that Polyscope's normal mainLoopIteration()
@@ -172,6 +262,159 @@ void processInputEventsSplitFrame() {
   }
 }
 
+std::string normalizeToken(std::string s) {
+  std::string out;
+  out.reserve(s.size());
+  for (unsigned char c : s) {
+    if (c == '_' || c == '-' || std::isspace(c)) continue;
+    out.push_back(static_cast<char>(std::tolower(c)));
+  }
+  return out;
+}
+
+polyscope::NavigateStyle parseNavigateStyle(matlab::engine::MATLABEngine* matlabPtr, const std::string& style) {
+  std::string key = normalizeToken(style);
+  if (key == "turntable") return polyscope::NavigateStyle::Turntable;
+  if (key == "free") return polyscope::NavigateStyle::Free;
+  if (key == "planar") return polyscope::NavigateStyle::Planar;
+  if (key == "arcball") return polyscope::NavigateStyle::Arcball;
+  if (key == "none") return polyscope::NavigateStyle::None;
+  if (key == "firstperson") return polyscope::NavigateStyle::FirstPerson;
+  throwError(matlabPtr, "Unknown navigation style: " + style);
+  return polyscope::NavigateStyle::Turntable;
+}
+
+polyscope::UpDir parseUpDir(matlab::engine::MATLABEngine* matlabPtr, const std::string& dir) {
+  std::string key = normalizeToken(dir);
+  if (key == "xup") return polyscope::UpDir::XUp;
+  if (key == "yup") return polyscope::UpDir::YUp;
+  if (key == "zup") return polyscope::UpDir::ZUp;
+  if (key == "negxup") return polyscope::UpDir::NegXUp;
+  if (key == "negyup") return polyscope::UpDir::NegYUp;
+  if (key == "negzup") return polyscope::UpDir::NegZUp;
+  throwError(matlabPtr, "Unknown up direction: " + dir);
+  return polyscope::UpDir::YUp;
+}
+
+polyscope::FrontDir parseFrontDir(matlab::engine::MATLABEngine* matlabPtr, const std::string& dir) {
+  std::string key = normalizeToken(dir);
+  if (key == "xfront" || key == "xforward") return polyscope::FrontDir::XFront;
+  if (key == "yfront" || key == "yforward") return polyscope::FrontDir::YFront;
+  if (key == "zfront" || key == "zforward") return polyscope::FrontDir::ZFront;
+  if (key == "negxfront" || key == "negxforward") return polyscope::FrontDir::NegXFront;
+  if (key == "negyfront" || key == "negyforward") return polyscope::FrontDir::NegYFront;
+  if (key == "negzfront" || key == "negzforward") return polyscope::FrontDir::NegZFront;
+  throwError(matlabPtr, "Unknown front direction: " + dir);
+  return polyscope::FrontDir::ZFront;
+}
+
+polyscope::ProjectionMode parseProjectionMode(matlab::engine::MATLABEngine* matlabPtr, const std::string& mode) {
+  std::string key = normalizeToken(mode);
+  if (key == "perspective") return polyscope::ProjectionMode::Perspective;
+  if (key == "orthographic") return polyscope::ProjectionMode::Orthographic;
+  throwError(matlabPtr, "Unknown projection mode: " + mode);
+  return polyscope::ProjectionMode::Perspective;
+}
+
+polyscope::LimitFPSMode parseLimitFPSMode(matlab::engine::MATLABEngine* matlabPtr, const std::string& mode) {
+  std::string key = normalizeToken(mode);
+  if (key == "ignorelimits") return polyscope::LimitFPSMode::IgnoreLimits;
+  if (key == "blocktohittarget") return polyscope::LimitFPSMode::BlockToHitTarget;
+  if (key == "skipframestohittarget") return polyscope::LimitFPSMode::SkipFramesToHitTarget;
+  throwError(matlabPtr, "Unknown FPS limit mode: " + mode);
+  return polyscope::LimitFPSMode::BlockToHitTarget;
+}
+
+polyscope::GroundPlaneMode parseGroundPlaneMode(matlab::engine::MATLABEngine* matlabPtr, const std::string& mode) {
+  std::string key = normalizeToken(mode);
+  if (key == "none") return polyscope::GroundPlaneMode::None;
+  if (key == "tile") return polyscope::GroundPlaneMode::Tile;
+  if (key == "tilereflection") return polyscope::GroundPlaneMode::TileReflection;
+  if (key == "shadowonly") return polyscope::GroundPlaneMode::ShadowOnly;
+  throwError(matlabPtr, "Unknown ground plane mode: " + mode);
+  return polyscope::GroundPlaneMode::None;
+}
+
+polyscope::GroundPlaneHeightMode parseGroundPlaneHeightMode(matlab::engine::MATLABEngine* matlabPtr,
+                                                            const std::string& mode) {
+  std::string key = normalizeToken(mode);
+  if (key == "automatic") return polyscope::GroundPlaneHeightMode::Automatic;
+  if (key == "manual") return polyscope::GroundPlaneHeightMode::Manual;
+  throwError(matlabPtr, "Unknown ground plane height mode: " + mode);
+  return polyscope::GroundPlaneHeightMode::Automatic;
+}
+
+polyscope::TransparencyMode parseTransparencyMode(matlab::engine::MATLABEngine* matlabPtr, const std::string& mode) {
+  std::string key = normalizeToken(mode);
+  if (key == "none") return polyscope::TransparencyMode::None;
+  if (key == "simple") return polyscope::TransparencyMode::Simple;
+  if (key == "pretty") return polyscope::TransparencyMode::Pretty;
+  throwError(matlabPtr, "Unknown transparency mode: " + mode);
+  return polyscope::TransparencyMode::None;
+}
+
+std::string toSnake(polyscope::NavigateStyle style) {
+  switch (style) {
+  case polyscope::NavigateStyle::Turntable: return "turntable";
+  case polyscope::NavigateStyle::Free: return "free";
+  case polyscope::NavigateStyle::Planar: return "planar";
+  case polyscope::NavigateStyle::Arcball: return "arcball";
+  case polyscope::NavigateStyle::None: return "none";
+  case polyscope::NavigateStyle::FirstPerson: return "first_person";
+  }
+  return "";
+}
+
+std::string toSnake(polyscope::UpDir dir) {
+  switch (dir) {
+  case polyscope::UpDir::XUp: return "x_up";
+  case polyscope::UpDir::YUp: return "y_up";
+  case polyscope::UpDir::ZUp: return "z_up";
+  case polyscope::UpDir::NegXUp: return "neg_x_up";
+  case polyscope::UpDir::NegYUp: return "neg_y_up";
+  case polyscope::UpDir::NegZUp: return "neg_z_up";
+  }
+  return "";
+}
+
+std::string toSnake(polyscope::FrontDir dir) {
+  switch (dir) {
+  case polyscope::FrontDir::XFront: return "x_front";
+  case polyscope::FrontDir::YFront: return "y_front";
+  case polyscope::FrontDir::ZFront: return "z_front";
+  case polyscope::FrontDir::NegXFront: return "neg_x_front";
+  case polyscope::FrontDir::NegYFront: return "neg_y_front";
+  case polyscope::FrontDir::NegZFront: return "neg_z_front";
+  }
+  return "";
+}
+
+std::string toSnake(polyscope::ProjectionMode mode) {
+  switch (mode) {
+  case polyscope::ProjectionMode::Perspective: return "perspective";
+  case polyscope::ProjectionMode::Orthographic: return "orthographic";
+  }
+  return "";
+}
+
+matlab::data::StructArray createPickResultStruct(matlab::data::ArrayFactory& factory,
+                                                 const polyscope::PickResult& p) {
+  std::vector<std::string> fields = {"is_hit",        "structure_type_name", "structure_name", "quantity_name",
+                                     "screen_coords", "buffer_inds",         "position",       "depth",
+                                     "local_index"};
+  auto s = factory.createStructArray({1, 1}, fields);
+  s[0]["is_hit"] = createScalarBool(factory, p.isHit);
+  s[0]["structure_type_name"] = factory.createScalar(p.structureType);
+  s[0]["structure_name"] = factory.createScalar(p.structureName);
+  s[0]["quantity_name"] = factory.createScalar(p.quantityName);
+  s[0]["screen_coords"] = createVectorDouble(factory, {p.screenCoords.x, p.screenCoords.y});
+  s[0]["buffer_inds"] = createVectorDouble(factory, {static_cast<double>(p.bufferInds.x), static_cast<double>(p.bufferInds.y)});
+  s[0]["position"] = createVectorDouble(factory, {p.position.x, p.position.y, p.position.z});
+  s[0]["depth"] = createScalarDouble(factory, p.depth);
+  s[0]["local_index"] = createScalarDouble(factory, static_cast<double>(p.localIndex) + 1.0);
+  return s;
+}
+
 } // namespace
 
 void bind_core_commands(CommandRegistry& reg) {
@@ -227,11 +470,29 @@ void bind_core_commands(CommandRegistry& reg) {
     }
   });
 
+  reg.registerCommand("hide_window", [](ArgumentList& outputs, ArgumentList& inputs,
+                                        matlab::engine::MATLABEngine* matlabPtr) {
+    if (polyscope::render::engine && !polyscope::isHeadless()) {
+      polyscope::render::engine->hideWindow();
+    }
+  });
+
   reg.registerCommand("focus_window", [](ArgumentList& outputs, ArgumentList& inputs,
                                          matlab::engine::MATLABEngine* matlabPtr) {
     if (polyscope::render::engine) {
       polyscope::render::engine->focusWindow();
     }
+  });
+
+  reg.registerCommand("set_up_dir", [](ArgumentList& outputs, ArgumentList& inputs,
+                                       matlab::engine::MATLABEngine* matlabPtr) {
+    checkMinArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::UpDir up = parseUpDir(matlabPtr, getString(getInput(inputs, 1)));
+    bool animate = false;
+    if (inputCount(inputs) > 2) {
+      animate = getScalarBool(getInput(inputs, 2));
+    }
+    polyscope::view::setUpDir(up, animate);
   });
 
   // === Split-frame API ======================================================
@@ -281,6 +542,16 @@ void bind_core_commands(CommandRegistry& reg) {
     // Render the 3D scene (without UI); this also clears redraw flags.
     polyscope::draw(false, false);
 
+    // Render widgets (e.g. transformation gizmos / slice plane widgets) which are
+    // drawn in the 3D scene using ImGuizmo. They are skipped by draw(false, false)
+    // but must be issued before ImGuiRender().
+    polyscope::render::engine->bindDisplay();
+    for (auto& wHandle : polyscope::state::widgets) {
+      if (wHandle.isValid()) {
+        wHandle.get().draw();
+      }
+    }
+
     // Render the ImGui draw lists built by MATLAB between frame_begin and frame_end.
     polyscope::render::engine->bindDisplay();
     polyscope::render::engine->ImGuiRender();
@@ -308,13 +579,21 @@ void bind_core_commands(CommandRegistry& reg) {
   reg.registerCommand("set_program_name", [](ArgumentList& outputs, ArgumentList& inputs,
                                              matlab::engine::MATLABEngine* matlabPtr) {
     checkNArgs(matlabPtr, inputCount(inputs), 2);
+    std::string oldProgramName = polyscope::options::programName;
     polyscope::options::programName = getString(getInput(inputs, 1));
+    setNativeProgramWindowTitle(oldProgramName, polyscope::options::programName);
   });
 
   reg.registerCommand("set_verbosity", [](ArgumentList& outputs, ArgumentList& inputs,
                                           matlab::engine::MATLABEngine* matlabPtr) {
     checkNArgs(matlabPtr, inputCount(inputs), 2);
     polyscope::options::verbosity = getScalarInt(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_print_prefix", [](ArgumentList& outputs, ArgumentList& inputs,
+                                             matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::printPrefix = getString(getInput(inputs, 1));
   });
 
   reg.registerCommand("set_errors_throw_exceptions", [](ArgumentList& outputs, ArgumentList& inputs,
@@ -335,6 +614,64 @@ void bind_core_commands(CommandRegistry& reg) {
     polyscope::options::enableVSync = getScalarBool(getInput(inputs, 1));
   });
 
+  reg.registerCommand("set_ssaa_factor", [](ArgumentList& outputs, ArgumentList& inputs,
+                                            matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    int factor = getScalarInt(getInput(inputs, 1));
+    factor = std::max(1, std::min(4, factor));
+    polyscope::options::ssaaFactor = factor;
+    // Apply immediately if the engine is already initialized so the UI / render
+    // state reflects the new value without waiting for the lazy update.
+    if (polyscope::isInitialized() && polyscope::render::engine) {
+      polyscope::render::engine->setSSAAFactor(factor);
+      polyscope::internal::lazy::ssaaFactor = factor;
+      polyscope::requestRedraw();
+    }
+  });
+
+  reg.registerCommand("get_ssaa_factor", [](ArgumentList& outputs, ArgumentList& inputs,
+                                            matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 1);
+    matlab::data::ArrayFactory factory;
+    if (polyscope::isInitialized()) {
+      getOutput(outputs, 0) = factory.createScalar(polyscope::render::engine->getSSAAFactor());
+    } else {
+      getOutput(outputs, 0) = factory.createScalar(polyscope::options::ssaaFactor);
+    }
+  });
+
+  reg.registerCommand("set_navigation_style", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                 matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::view::setNavigateStyle(parseNavigateStyle(matlabPtr, getString(getInput(inputs, 1))));
+  });
+
+  reg.registerCommand("get_navigation_style", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                 matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = factory.createScalar(toSnake(polyscope::view::getNavigateStyle()));
+  });
+
+  reg.registerCommand("get_up_dir", [](ArgumentList& outputs, ArgumentList& inputs,
+                                       matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = factory.createScalar(toSnake(polyscope::view::getUpDir()));
+  });
+
+  reg.registerCommand("set_front_dir", [](ArgumentList& outputs, ArgumentList& inputs,
+                                          matlab::engine::MATLABEngine* matlabPtr) {
+    checkMinArgs(matlabPtr, inputCount(inputs), 2);
+    bool animate = false;
+    if (inputCount(inputs) > 2) animate = getScalarBool(getInput(inputs, 2));
+    polyscope::view::setFrontDir(parseFrontDir(matlabPtr, getString(getInput(inputs, 1))), animate);
+  });
+
+  reg.registerCommand("get_front_dir", [](ArgumentList& outputs, ArgumentList& inputs,
+                                          matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = factory.createScalar(toSnake(polyscope::view::getFrontDir()));
+  });
+
   reg.registerCommand("set_use_prefs_file", [](ArgumentList& outputs, ArgumentList& inputs,
                                                matlab::engine::MATLABEngine* matlabPtr) {
     checkNArgs(matlabPtr, inputCount(inputs), 2);
@@ -345,6 +682,199 @@ void bind_core_commands(CommandRegistry& reg) {
                                                         matlab::engine::MATLABEngine* matlabPtr) {
     checkNArgs(matlabPtr, inputCount(inputs), 2);
     polyscope::options::allowHeadlessBackends = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_do_default_mouse_interaction", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                             matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::doDefaultMouseInteraction = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("request_redraw", [](ArgumentList& outputs, ArgumentList& inputs,
+                                           matlab::engine::MATLABEngine* matlabPtr) {
+    polyscope::requestRedraw();
+  });
+
+  reg.registerCommand("get_redraw_requested", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                 matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createScalarBool(factory, polyscope::redrawRequested());
+  });
+
+  reg.registerCommand("set_window_icon", [](ArgumentList& outputs, ArgumentList& inputs,
+                                            matlab::engine::MATLABEngine* matlabPtr) {
+    if (inputCount(inputs) < 2) throwError(matlabPtr, "Expected set_window_icon(filename)");
+    polyscope::setWindowIcon(getString(getInput(inputs, 1)));
+  });
+
+  reg.registerCommand("set_always_redraw", [](ArgumentList& outputs, ArgumentList& inputs,
+                                              matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::alwaysRedraw = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_frame_tick_limit_fps_mode", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                          matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::frameTickLimitFPSMode = parseLimitFPSMode(matlabPtr, getString(getInput(inputs, 1)));
+  });
+
+  reg.registerCommand("set_enable_render_error_checks", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                           matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::enableRenderErrorChecks = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_egl_device_index", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                 matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::eglDeviceIndex = getScalarInt(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_autocenter_structures", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                      matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::autocenterStructures = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_autoscale_structures", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                     matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::autoscaleStructures = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_ui_scale", [](ArgumentList& outputs, ArgumentList& inputs,
+                                         matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::uiScale = getScalarFloat(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("get_ui_scale", [](ArgumentList& outputs, ArgumentList& inputs,
+                                         matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createScalarDouble(factory, polyscope::options::uiScale);
+  });
+
+  reg.registerCommand("set_user_gui_is_on_right_side", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                          matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::userGuiIsOnRightSide = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_build_default_gui_panels", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                         matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::buildDefaultGuiPanels = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_right_gui_pane_width", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                     matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::rightGuiPaneWidth = getScalarInt(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("get_right_gui_pane_width", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                     matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createScalarDouble(factory, polyscope::options::rightGuiPaneWidth);
+  });
+
+  reg.registerCommand("set_render_scene", [](ArgumentList& outputs, ArgumentList& inputs,
+                                             matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::renderScene = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_open_imgui_window_for_user_callback", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                                    matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::openImGuiWindowForUserCallback = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_invoke_user_callback_for_nested_show", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                                     matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::invokeUserCallbackForNestedShow = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_give_focus_on_show", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                   matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::giveFocusOnShow = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_hide_window_after_show", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                       matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::hideWindowAfterShow = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_warn_for_invalid_values", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                        matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::warnForInvalidValues = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_display_message_popups", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                       matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::displayMessagePopups = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("clear_configure_imgui_style_callback", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                                 matlab::engine::MATLABEngine* matlabPtr) {
+    polyscope::options::configureImGuiStyleCallback = polyscope::configureImGuiStyle;
+  });
+
+  reg.registerCommand("clear_prepare_imgui_fonts_callback", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                               matlab::engine::MATLABEngine* matlabPtr) {
+    polyscope::options::prepareImGuiFontsCallback = polyscope::loadBaseFonts;
+  });
+
+  reg.registerCommand("clear_files_dropped_callback", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                         matlab::engine::MATLABEngine* matlabPtr) {
+    polyscope::state::filesDroppedCallback = nullptr;
+  });
+
+  // === Scene extents =======================================================
+  reg.registerCommand("set_automatically_compute_scene_extents", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                                    matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::automaticallyComputeSceneExtents = getScalarBool(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_length_scale", [](ArgumentList& outputs, ArgumentList& inputs,
+                                             matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::state::lengthScale = getScalarFloat(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("get_length_scale", [](ArgumentList& outputs, ArgumentList& inputs,
+                                             matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createScalarDouble(factory, polyscope::state::lengthScale);
+  });
+
+  reg.registerCommand("set_bounding_box", [](ArgumentList& outputs, ArgumentList& inputs,
+                                             matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 3);
+    Eigen::Vector3f low = getVec3(getInput(inputs, 1));
+    Eigen::Vector3f high = getVec3(getInput(inputs, 2));
+    polyscope::state::boundingBox = std::tuple<glm::vec3, glm::vec3>(
+        glm::vec3(low(0), low(1), low(2)), glm::vec3(high(0), high(1), high(2)));
+  });
+
+  reg.registerCommand("get_bounding_box", [](ArgumentList& outputs, ArgumentList& inputs,
+                                             matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    auto [low, high] = polyscope::state::boundingBox;
+    getOutput(outputs, 0) = createVectorDouble(factory, {low.x, low.y, low.z});
+    getOutput(outputs, 1) = createVectorDouble(factory, {high.x, high.y, high.z});
+  });
+
+  reg.registerCommand("update_scene_extents", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                 matlab::engine::MATLABEngine* matlabPtr) {
+    polyscope::updateStructureExtents();
   });
 
   // === View / camera =======================================================
@@ -378,6 +908,150 @@ void bind_core_commands(CommandRegistry& reg) {
     if (inputCount(inputs) > 3) flyTo = getScalarBool(getInput(inputs, 3));
     polyscope::view::lookAt(glm::vec3(eye(0, 0), eye(0, 1), eye(0, 2)),
                             glm::vec3(target(0, 0), target(0, 1), target(0, 2)), flyTo);
+  });
+
+  reg.registerCommand("look_at_dir", [](ArgumentList& outputs, ArgumentList& inputs,
+                                        matlab::engine::MATLABEngine* matlabPtr) {
+    checkMinArgs(matlabPtr, inputCount(inputs), 4);
+    Eigen::Vector3f eye = getVec3(getInput(inputs, 1));
+    Eigen::Vector3f target = getVec3(getInput(inputs, 2));
+    Eigen::Vector3f up = getVec3(getInput(inputs, 3));
+    bool flyTo = false;
+    if (inputCount(inputs) > 4) flyTo = getScalarBool(getInput(inputs, 4));
+    polyscope::view::lookAt(glm::vec3(eye(0), eye(1), eye(2)), glm::vec3(target(0), target(1), target(2)),
+                            glm::vec3(up(0), up(1), up(2)), flyTo);
+  });
+
+  reg.registerCommand("set_view_projection_mode", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                     matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::view::setProjectionMode(parseProjectionMode(matlabPtr, getString(getInput(inputs, 1))));
+  });
+
+  reg.registerCommand("get_view_projection_mode", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                     matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = factory.createScalar(toSnake(polyscope::view::getProjectionMode()));
+  });
+
+  reg.registerCommand("set_vertical_fov_degrees", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                     matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::view::setVerticalFieldOfViewDegrees(getScalarFloat(getInput(inputs, 1)));
+  });
+
+  reg.registerCommand("get_vertical_fov_degrees", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                     matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createScalarDouble(factory, polyscope::view::getVerticalFieldOfViewDegrees());
+  });
+
+  reg.registerCommand("get_aspect_ratio_width_over_height", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                               matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createScalarDouble(factory, polyscope::view::getAspectRatioWidthOverHeight());
+  });
+
+  reg.registerCommand("get_buffer_size", [](ArgumentList& outputs, ArgumentList& inputs,
+                                            matlab::engine::MATLABEngine* matlabPtr) {
+    auto sz = polyscope::view::getBufferSize();
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createVectorDouble(factory, {static_cast<double>(std::get<0>(sz)),
+                                                         static_cast<double>(std::get<1>(sz))});
+  });
+
+  reg.registerCommand("set_window_resizable", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                 matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::view::setWindowResizable(getScalarBool(getInput(inputs, 1)));
+  });
+
+  reg.registerCommand("get_window_resizable", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                 matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createScalarBool(factory, polyscope::view::getWindowResizable());
+  });
+
+  reg.registerCommand("set_view_from_json", [](ArgumentList& outputs, ArgumentList& inputs,
+                                               matlab::engine::MATLABEngine* matlabPtr) {
+    checkMinArgs(matlabPtr, inputCount(inputs), 2);
+    bool flyTo = false;
+    if (inputCount(inputs) > 2) flyTo = getScalarBool(getInput(inputs, 2));
+    polyscope::view::setViewFromJson(getString(getInput(inputs, 1)), flyTo);
+  });
+
+  reg.registerCommand("get_view_as_json", [](ArgumentList& outputs, ArgumentList& inputs,
+                                             matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = factory.createScalar(polyscope::view::getViewAsJson());
+  });
+
+  reg.registerCommand("screen_coords_to_world_ray", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                       matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    Eigen::Vector2f coords = getVec2(getInput(inputs, 1));
+    glm::vec3 ray = polyscope::view::screenCoordsToWorldRay(glm::vec2(coords(0), coords(1)));
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createVectorDouble(factory, {ray.x, ray.y, ray.z});
+  });
+
+  reg.registerCommand("set_camera_view_matrix", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                   matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    Eigen::MatrixXf mat = getMatrixFloat(getInput(inputs, 1));
+    if (mat.rows() != 4 || mat.cols() != 4) {
+      throwError(matlabPtr, "camera view matrix must be 4x4");
+    }
+    glm::mat4 viewMat(1.0f);
+    for (int j = 0; j < 4; ++j) {
+      for (int i = 0; i < 4; ++i) {
+        viewMat[j][i] = mat(i, j);
+      }
+    }
+    polyscope::view::setCameraViewMatrix(viewMat);
+  });
+
+  reg.registerCommand("get_camera_view_matrix", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                   matlab::engine::MATLABEngine* matlabPtr) {
+    glm::mat4 mat = polyscope::view::getCameraViewMatrix();
+    Eigen::MatrixXd out(4, 4);
+    for (int j = 0; j < 4; ++j) {
+      for (int i = 0; i < 4; ++i) {
+        out(i, j) = mat[j][i];
+      }
+    }
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createMatrixDouble(factory, out);
+  });
+
+  reg.registerCommand("set_view_center_and_look_at", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                        matlab::engine::MATLABEngine* matlabPtr) {
+    checkMinArgs(matlabPtr, inputCount(inputs), 2);
+    Eigen::Vector3f pos = getVec3(getInput(inputs, 1));
+    bool flyTo = false;
+    if (inputCount(inputs) > 2) flyTo = getScalarBool(getInput(inputs, 2));
+    polyscope::view::setViewCenterAndLookAt(glm::vec3(pos(0), pos(1), pos(2)), flyTo);
+  });
+
+  reg.registerCommand("set_view_center_and_project", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                        matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    Eigen::Vector3f pos = getVec3(getInput(inputs, 1));
+    polyscope::view::setViewCenterAndProject(glm::vec3(pos(0), pos(1), pos(2)));
+  });
+
+  reg.registerCommand("set_view_center_raw", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    Eigen::Vector3f pos = getVec3(getInput(inputs, 1));
+    polyscope::view::setViewCenterRaw(glm::vec3(pos(0), pos(1), pos(2)));
+  });
+
+  reg.registerCommand("get_view_center", [](ArgumentList& outputs, ArgumentList& inputs,
+                                            matlab::engine::MATLABEngine* matlabPtr) {
+    glm::vec3 c = polyscope::view::getViewCenter();
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createVectorDouble(factory, {c.x, c.y, c.z});
   });
 
   reg.registerCommand("set_background_color", [](ArgumentList& outputs, ArgumentList& inputs,
@@ -426,6 +1100,221 @@ void bind_core_commands(CommandRegistry& reg) {
                                                      matlab::engine::MATLABEngine* matlabPtr) {
     checkNArgs(matlabPtr, inputCount(inputs), 2);
     polyscope::options::screenshotExtension = getString(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("screenshot_to_buffer", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                 matlab::engine::MATLABEngine* matlabPtr) {
+    polyscope::ScreenshotOptions opts;
+    opts.transparentBackground = true;
+    opts.includeUI = false;
+    bool verticalFlip = true;
+    if (inputCount(inputs) > 1) {
+      OptionsParser parser(inputs, 1, matlabPtr);
+      opts.transparentBackground = parser.getBool("transparent_bg", opts.transparentBackground);
+      opts.includeUI = parser.getBool("include_ui", opts.includeUI);
+      verticalFlip = parser.getBool("vertical_flip", verticalFlip);
+    }
+
+    std::vector<unsigned char> raw = polyscope::screenshotToBuffer(opts);
+    auto [w, h] = polyscope::view::getBufferSize();
+    matlab::data::ArrayFactory factory;
+    auto arr = factory.createArray<uint8_t>({static_cast<size_t>(h), static_cast<size_t>(w), 4});
+    for (int y = 0; y < h; ++y) {
+      int srcY = verticalFlip ? (h - 1 - y) : y;
+      for (int x = 0; x < w; ++x) {
+        for (int c = 0; c < 4; ++c) {
+          size_t srcInd = static_cast<size_t>((srcY * w + x) * 4 + c);
+          size_t dstInd = static_cast<size_t>(y + x * h + c * h * w);
+          arr[dstInd] = raw[srcInd];
+        }
+      }
+    }
+    getOutput(outputs, 0) = arr;
+  });
+
+  // === Advanced UI management =============================================
+  reg.registerCommand("build_polyscope_gui", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                matlab::engine::MATLABEngine* matlabPtr) {
+    polyscope::buildPolyscopeGui();
+  });
+
+  reg.registerCommand("build_structure_gui", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                matlab::engine::MATLABEngine* matlabPtr) {
+    polyscope::buildStructureGui();
+  });
+
+  reg.registerCommand("build_pick_gui", [](ArgumentList& outputs, ArgumentList& inputs,
+                                           matlab::engine::MATLABEngine* matlabPtr) {
+    polyscope::buildPickGui();
+  });
+
+  reg.registerCommand("build_user_gui_and_invoke_callback", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                               matlab::engine::MATLABEngine* matlabPtr) {
+    polyscope::buildUserGuiAndInvokeCallback();
+  });
+
+  // === Messages ============================================================
+  reg.registerCommand("info", [](ArgumentList& outputs, ArgumentList& inputs,
+                                 matlab::engine::MATLABEngine* matlabPtr) {
+    checkMinArgs(matlabPtr, inputCount(inputs), 2);
+    int verbosity = 0;
+    std::string message;
+    if (inputCount(inputs) > 2) {
+      verbosity = getScalarInt(getInput(inputs, 1));
+      message = getString(getInput(inputs, 2));
+    } else {
+      message = getString(getInput(inputs, 1));
+    }
+    polyscope::info(verbosity, message);
+  });
+
+  reg.registerCommand("warning", [](ArgumentList& outputs, ArgumentList& inputs,
+                                    matlab::engine::MATLABEngine* matlabPtr) {
+    checkMinArgs(matlabPtr, inputCount(inputs), 2);
+    std::string detail = "";
+    if (inputCount(inputs) > 2) detail = getString(getInput(inputs, 2));
+    polyscope::warning(getString(getInput(inputs, 1)), detail);
+  });
+
+  reg.registerCommand("error", [](ArgumentList& outputs, ArgumentList& inputs,
+                                  matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::error(getString(getInput(inputs, 1)));
+  });
+
+  reg.registerCommand("terminating_error", [](ArgumentList& outputs, ArgumentList& inputs,
+                                              matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::terminatingError(getString(getInput(inputs, 1)));
+  });
+
+  // === Picking =============================================================
+  reg.registerCommand("pick_at_screen_coords", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                  matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    Eigen::Vector2f coords = getVec2(getInput(inputs, 1));
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createPickResultStruct(factory, polyscope::pickAtScreenCoords(glm::vec2(coords(0), coords(1))));
+  });
+
+  reg.registerCommand("pick_at_buffer_inds", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    auto coords = getVectorInt(getInput(inputs, 1));
+    if (coords.size() != 2) {
+      throwError(matlabPtr, "buffer indices must be a 2-vector");
+    }
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createPickResultStruct(factory, polyscope::pickAtBufferInds(glm::ivec2(coords[0], coords[1])));
+  });
+
+  reg.registerCommand("have_selection", [](ArgumentList& outputs, ArgumentList& inputs,
+                                           matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createScalarBool(factory, polyscope::haveSelection());
+  });
+
+  reg.registerCommand("get_selection", [](ArgumentList& outputs, ArgumentList& inputs,
+                                          matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createPickResultStruct(factory, polyscope::getSelection());
+  });
+
+  reg.registerCommand("reset_selection", [](ArgumentList& outputs, ArgumentList& inputs,
+                                            matlab::engine::MATLABEngine* matlabPtr) {
+    polyscope::resetSelection();
+  });
+
+  // === Ground plane, shadows, transparency, rendering ======================
+  reg.registerCommand("set_ground_plane_mode", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                  matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::groundPlaneMode = parseGroundPlaneMode(matlabPtr, getString(getInput(inputs, 1)));
+  });
+
+  reg.registerCommand("set_ground_plane_height_mode", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                         matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::groundPlaneHeightMode = parseGroundPlaneHeightMode(matlabPtr, getString(getInput(inputs, 1)));
+  });
+
+  reg.registerCommand("set_ground_plane_height", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                    matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::groundPlaneHeightMode = polyscope::GroundPlaneHeightMode::Manual;
+    polyscope::options::groundPlaneHeight = getScalarFloat(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_ground_plane_height_factor", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                           matlab::engine::MATLABEngine* matlabPtr) {
+    checkMinArgs(matlabPtr, inputCount(inputs), 2);
+    bool isRelative = true;
+    if (inputCount(inputs) > 2) isRelative = getScalarBool(getInput(inputs, 2));
+    polyscope::options::groundPlaneHeightMode = polyscope::GroundPlaneHeightMode::Automatic;
+    polyscope::options::groundPlaneHeightFactor.set(getScalarFloat(getInput(inputs, 1)), isRelative);
+  });
+
+  reg.registerCommand("set_shadow_blur_iters", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                  matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::shadowBlurIters = getScalarInt(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_shadow_darkness", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::shadowDarkness = getScalarFloat(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("set_transparency_mode", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                  matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::transparencyMode = parseTransparencyMode(matlabPtr, getString(getInput(inputs, 1)));
+  });
+
+  reg.registerCommand("set_transparency_render_passes", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                           matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    polyscope::options::transparencyRenderPasses = getScalarInt(getInput(inputs, 1));
+  });
+
+  reg.registerCommand("get_final_scene_color_texture_native_handle", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                                        matlab::engine::MATLABEngine* matlabPtr) {
+    matlab::data::ArrayFactory factory;
+    uint64_t handle = 0;
+    if (polyscope::render::engine) {
+      handle = static_cast<uint64_t>(polyscope::render::engine->getFinalSceneColorTexture().getNativeBufferID());
+    }
+    getOutput(outputs, 0) = createScalarDouble(factory, static_cast<double>(handle));
+  });
+
+  // === Materials and colormaps ============================================
+  reg.registerCommand("load_static_material", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                 matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 3);
+    polyscope::loadStaticMaterial(getString(getInput(inputs, 1)), getString(getInput(inputs, 2)));
+  });
+
+  reg.registerCommand("load_blendable_material", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                    matlab::engine::MATLABEngine* matlabPtr) {
+    checkMinArgs(matlabPtr, inputCount(inputs), 3);
+    std::string matName = getString(getInput(inputs, 1));
+    if (inputCount(inputs) == 3) {
+      std::vector<std::string> filenames = getStringVector(getInput(inputs, 2));
+      if (filenames.size() != 4) {
+        throwError(matlabPtr, "blendable material filename list must contain exactly 4 filenames");
+      }
+      polyscope::loadBlendableMaterial(matName, std::array<std::string, 4>{filenames[0], filenames[1], filenames[2], filenames[3]});
+    } else {
+      checkNArgs(matlabPtr, inputCount(inputs), 4);
+      polyscope::loadBlendableMaterial(matName, getString(getInput(inputs, 2)), getString(getInput(inputs, 3)));
+    }
+  });
+
+  reg.registerCommand("load_color_map", [](ArgumentList& outputs, ArgumentList& inputs,
+                                           matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 3);
+    polyscope::loadColorMap(getString(getInput(inputs, 1)), getString(getInput(inputs, 2)));
   });
 
   // === Render engine =======================================================
@@ -520,6 +1409,25 @@ void bind_core_commands(CommandRegistry& reg) {
       throwError(matlabPtr, "failed to write capture PNG: " + filename);
     }
   });
+
+  // === Per-structure slice plane options ====================================
+  reg.registerCommand("structure_set_cull_whole_elements",
+                      [](ArgumentList& outputs, ArgumentList& inputs, MATLABEngine* matlabPtr) {
+                        if (inputCount(inputs) < 3)
+                          throwError(matlabPtr, "Expected structure_set_cull_whole_elements(name, val)");
+                        getStructureByName(matlabPtr, getString(getInput(inputs, 1)))
+                            ->setCullWholeElements(getScalarBool(getInput(inputs, 2)));
+                      });
+
+  reg.registerCommand("structure_get_cull_whole_elements",
+                      [](ArgumentList& outputs, ArgumentList& inputs, MATLABEngine* matlabPtr) {
+                        if (inputCount(inputs) < 2)
+                          throwError(matlabPtr, "Expected structure_get_cull_whole_elements(name)");
+                        bool val = getStructureByName(matlabPtr, getString(getInput(inputs, 1)))
+                                       ->getCullWholeElements();
+                        matlab::data::ArrayFactory factory;
+                        getOutput(outputs, 0) = createScalarBool(factory, val);
+                      });
 }
 
 } // namespace ps_mex

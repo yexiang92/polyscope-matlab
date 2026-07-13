@@ -39,6 +39,8 @@ if (BUILD_MATLAB_BINDINGS)
       src/matlab/cpp/bind_volume_grid.cpp
       src/matlab/cpp/bind_sparse_volume_grid.cpp
       src/matlab/cpp/bind_camera_view.cpp
+      src/matlab/cpp/bind_transformation_gizmo.cpp
+      src/matlab/cpp/bind_slice_plane.cpp
       src/matlab/cpp/bind_imgui.cpp
       src/matlab/cpp/bind_imgui_constant_lookup.cpp
       src/matlab/cpp/bind_implot.cpp

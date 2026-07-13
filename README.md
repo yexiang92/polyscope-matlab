@@ -23,7 +23,7 @@ The bindings are cross-platform: the same MATLAB source and C++ MEX code builds 
 ## Clone
 
 ```bash
-git clone --recursive https://github.com/YOUR_USERNAME/polyscope-matlab.git
+git clone --recursive https://github.com/yexiang92/polyscope-matlab.git
 ```
 
 If you already cloned without `--recursive`, run:

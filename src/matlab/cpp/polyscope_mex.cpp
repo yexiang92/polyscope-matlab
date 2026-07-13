@@ -12,6 +12,8 @@
 #include "bind_volume_grid.h"
 #include "bind_sparse_volume_grid.h"
 #include "bind_camera_view.h"
+#include "bind_transformation_gizmo.h"
+#include "bind_slice_plane.h"
 #include "bind_imgui.h"
 #include "bind_implot.h"
 
@@ -48,6 +50,8 @@ public:
     ps_mex::bind_volume_grid_commands(reg);
     ps_mex::bind_sparse_volume_grid_commands(reg);
     ps_mex::bind_camera_view_commands(reg);
+    ps_mex::bind_transformation_gizmo_commands(reg);
+    ps_mex::bind_slice_plane_commands(reg);
     ps_mex::bind_imgui_commands(reg);
     ps_mex::bind_implot_commands(reg);
   }
