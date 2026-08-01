@@ -2683,10 +2683,28 @@ void bind_imgui_commands(CommandRegistry& reg) {
   });
 
   reg.registerCommand("imgui_get_style", [](ArgumentList& outputs, ArgumentList& inputs,
-                                            MATLABEngine* matlabPtr) {
+                                             MATLABEngine* matlabPtr) {
     ImGuiStyle* style = &ImGui::GetStyle();
     matlab::data::ArrayFactory factory;
     getOutput(outputs, 0) = createScalarDouble(factory, style ? static_cast<double>(reinterpret_cast<uintptr_t>(style)) : 0.0);
+  });
+
+  reg.registerCommand("imgui_style_colors_dark", [](ArgumentList&, ArgumentList&,
+                                                      MATLABEngine*) {
+    ImGui::StyleColorsDark();
+  });
+
+  reg.registerCommand("imgui_style_colors_light", [](ArgumentList&, ArgumentList&,
+                                                       MATLABEngine*) {
+    ImGui::StyleColorsLight();
+  });
+
+  reg.registerCommand("imgui_set_style_color", [](ArgumentList&, ArgumentList& inputs,
+                                                   MATLABEngine* matlabPtr) {
+    if (inputCount(inputs) < 3) throwError(matlabPtr, "Expected imgui_set_style_color(idx, color)");
+    int idx = getScalarInt(getInput(inputs, 1));
+    if (idx < 0 || idx >= ImGuiCol_COUNT) throwError(matlabPtr, "ImGui style color index is out of range");
+    ImGui::GetStyle().Colors[idx] = toImVec4(getVec4(getInput(inputs, 2)));
   });
 
   reg.registerCommand("imgui_io_get", [](ArgumentList& outputs, ArgumentList& inputs,
@@ -3213,6 +3231,20 @@ void bind_imgui_commands(CommandRegistry& reg) {
     ImU32 col = static_cast<ImU32>(getScalarDouble(getInput(inputs, 3)));
     std::string text = getString(getInput(inputs, 4));
     dl->AddText(pos, col, text.c_str(), text.c_str() + text.size());
+  });
+
+  reg.registerCommand("imgui_drawlist_add_image", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                     MATLABEngine* matlabPtr) {
+    if (inputCount(inputs) < 5) throwError(matlabPtr, "Expected imgui_drawlist_add_image(handle, texture, p_min, p_max, ...)");
+    ImDrawList* dl = imguiDrawListFromHandle(getInput(inputs, 1));
+    if (!dl) throwError(matlabPtr, "Invalid ImDrawList handle");
+    ImTextureID texture = static_cast<ImTextureID>(static_cast<uintptr_t>(getScalarDouble(getInput(inputs, 2))));
+    ImVec2 pMin = toImVec2(getVec2(getInput(inputs, 3)));
+    ImVec2 pMax = toImVec2(getVec2(getInput(inputs, 4)));
+    ImVec2 uv0 = inputCount(inputs) > 5 ? toImVec2(getVec2(getInput(inputs, 5))) : ImVec2(0, 0);
+    ImVec2 uv1 = inputCount(inputs) > 6 ? toImVec2(getVec2(getInput(inputs, 6))) : ImVec2(1, 1);
+    ImU32 tint = inputCount(inputs) > 7 ? static_cast<ImU32>(getScalarDouble(getInput(inputs, 7))) : IM_COL32_WHITE;
+    dl->AddImage(texture, pMin, pMax, uv0, uv1, tint);
   });
 
   reg.registerCommand("imgui_drawlist_add_triangle", [](ArgumentList& outputs, ArgumentList& inputs,

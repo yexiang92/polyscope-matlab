@@ -36,12 +36,33 @@ classdef Polyscope < handle
             % frame_begin()/frame_end(). Otherwise, defer to the native C++ show().
             if ~isempty(obj.userCallback_)
                 obj.show_window();
+                % show_window() makes the GLFW window visible but does not
+                % necessarily raise it above MATLAB on Windows.
+                obj.focus_window();
+                windowCleanup = onCleanup(@() obj.hide_window_safely_()); %#ok<NASGU>
+                focusedAfterFirstFrame = false;
                 if nargin < 2
                     while ~obj.window_requests_close()
                         tFrame = tic;
                         obj.frame_begin();
-                        obj.userCallback_();
-                        obj.frame_end();
+                        frameOpen = true;
+                        try
+                            obj.userCallback_();
+                            obj.frame_end();
+                            frameOpen = false;
+                            if ~focusedAfterFirstFrame
+                                obj.focus_window_safely_();
+                                focusedAfterFirstFrame = true;
+                            end
+                        catch err
+                            if frameOpen
+                                try
+                                    obj.frame_end();
+                                catch
+                                end
+                            end
+                            rethrow(err);
+                        end
                         obj.wait_after_frame_(toc(tFrame));
                     end
                 else
@@ -49,13 +70,28 @@ classdef Polyscope < handle
                     while frame <= forFrames && ~obj.window_requests_close()
                         tFrame = tic;
                         obj.frame_begin();
-                        obj.userCallback_();
-                        obj.frame_end();
+                        frameOpen = true;
+                        try
+                            obj.userCallback_();
+                            obj.frame_end();
+                            frameOpen = false;
+                            if ~focusedAfterFirstFrame
+                                obj.focus_window_safely_();
+                                focusedAfterFirstFrame = true;
+                            end
+                        catch err
+                            if frameOpen
+                                try
+                                    obj.frame_end();
+                                catch
+                                end
+                            end
+                            rethrow(err);
+                        end
                         obj.wait_after_frame_(toc(tFrame));
                         frame = frame + 1;
                     end
                 end
-                obj.hide_window();
             else
                 if nargin < 2
                     call_mex('show');
@@ -572,6 +608,14 @@ classdef Polyscope < handle
             handle = call_mex('get_final_scene_color_texture_native_handle');
         end
 
+        function [handle, width, height] = load_image_texture(~, filename)
+            [handle, width, height] = call_mex('load_image_texture', char(string(filename)));
+        end
+
+        function release_image_texture(~, handle)
+            call_mex('release_image_texture', handle);
+        end
+
         function load_static_material(~, matName, filename)
             call_mex('load_static_material', matName, filename);
         end
@@ -797,6 +841,20 @@ classdef Polyscope < handle
     end
 
     methods (Access = private)
+        function focus_window_safely_(obj)
+            try
+                obj.focus_window();
+            catch
+            end
+        end
+
+        function hide_window_safely_(obj)
+            try
+                obj.hide_window();
+            catch
+            end
+        end
+
         function wait_after_frame_(obj, elapsed)
             targetPeriod = 1 / max(1, double(obj.maxFps_));
             remaining = targetPeriod - elapsed;

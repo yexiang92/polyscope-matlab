@@ -20,6 +20,7 @@
 #include <glad/glad.h>
 
 #include "stb_image_write.h"
+#include "stb_image.h"
 
 #include <vector>
 #include <cstdint>
@@ -27,6 +28,8 @@
 #include <algorithm>
 #include <cctype>
 #include <array>
+#include <memory>
+#include <unordered_map>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -49,6 +52,10 @@
 namespace polyscope {
   void renderScene();
   void renderSceneToScreen();
+}
+
+namespace {
+std::unordered_map<uint64_t, std::shared_ptr<polyscope::render::TextureBuffer>> matlabImageTextures;
 }
 
 namespace ps_mex {
@@ -562,6 +569,7 @@ void bind_core_commands(CommandRegistry& reg) {
                                      matlab::engine::MATLABEngine* matlabPtr) {
     bool allowMidFrame = false;
     if (inputCount(inputs) > 1) allowMidFrame = getScalarBool(getInput(inputs, 1));
+    matlabImageTextures.clear();
     polyscope::shutdown(allowMidFrame);
   });
 
@@ -1286,6 +1294,42 @@ void bind_core_commands(CommandRegistry& reg) {
       handle = static_cast<uint64_t>(polyscope::render::engine->getFinalSceneColorTexture().getNativeBufferID());
     }
     getOutput(outputs, 0) = createScalarDouble(factory, static_cast<double>(handle));
+  });
+
+  reg.registerCommand("load_image_texture", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    if (!polyscope::render::engine) throwError(matlabPtr, "Polyscope must be initialized before loading an image texture");
+    const std::string filename = getString(getInput(inputs, 1));
+    int width = 0, height = 0, channels = 0;
+    unsigned char* pixels = stbi_load(filename.c_str(), &width, &height, &channels, 4);
+    if (!pixels) throwError(matlabPtr, "Could not load image texture: " + filename);
+    auto texture = polyscope::render::engine->generateTextureBuffer(
+        polyscope::TextureFormat::RGBA8, static_cast<unsigned int>(width),
+        static_cast<unsigned int>(height), pixels);
+    stbi_image_free(pixels);
+    texture->setFilterMode(polyscope::FilterMode::Linear);
+    const uint64_t handle = static_cast<uint64_t>(texture->getNativeBufferID());
+    // Logos are typically drawn much smaller than their source PNG. Build a
+    // complete mip chain and use trilinear minification to avoid the blurred,
+    // aliased result produced by sampling only the full-resolution level.
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(handle));
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    matlabImageTextures[handle] = std::move(texture);
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createScalarDouble(factory, static_cast<double>(handle));
+    getOutput(outputs, 1) = createScalarDouble(factory, static_cast<double>(width));
+    getOutput(outputs, 2) = createScalarDouble(factory, static_cast<double>(height));
+  });
+
+  reg.registerCommand("release_image_texture", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                   matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    const uint64_t handle = static_cast<uint64_t>(getScalarDouble(getInput(inputs, 1)));
+    matlabImageTextures.erase(handle);
   });
 
   // === Materials and colormaps ============================================

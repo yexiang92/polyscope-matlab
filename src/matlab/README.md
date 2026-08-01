@@ -55,6 +55,7 @@ ps.shutdown();
 - Window: `set_window_size(w, h)`, `get_window_size()`, `show_window()`, `focus_window()`
 - Camera: `reset_camera_to_home_view()`, `look_at(eye, target, flyTo)`
 - Background: `set_background_color(c)`, `get_background_color()`
+- ImGui themes: `ImGui.StyleColorsLight()`, `ImGui.StyleColorsDark()`, `ImGui.SetStyleColor(idx, rgba)`
 - Screenshot: `screenshot(filename, 'transparent_bg', true, 'include_ui', false)`
 - Options: `set_program_name`, `set_verbosity`, `set_max_fps`, etc.
 - Safe callback loop: `set_user_callback(@cb)` followed by `ps.show()` or `ps.show(nFrames)`.
@@ -95,7 +96,7 @@ pc.add_vector_quantity('vec', vecs, ...
     'color', [1, 0, 0]);
 ```
 
-Supported scalar options: `enabled`, `datatype`, `color_map`, `cmap`, `map_range`, `vmin`/`vmax`, `onscreen_colorbar_enabled`, `onscreen_colorbar_location`, `isolines_enabled`, `isoline_style`, `isoline_period`, `isoline_period_relative`, `isoline_darkness`, `isoline_contour_thickness`.
+Supported scalar options: `enabled`, `datatype`, `color_map`, `cmap`, `map_range`, `vmin`/`vmax`, `onscreen_colorbar_enabled`, `onscreen_colorbar_location`, `onscreen_colorbar_title`, `onscreen_colorbar_background_color`, `onscreen_colorbar_tick_color`, `onscreen_colorbar_label_color`, `onscreen_colorbar_title_color`, `isolines_enabled`, `isoline_style`, `isoline_period`, `isoline_period_relative`, `isoline_darkness`, `isoline_contour_thickness`.
 
 Supported vector options: `enabled`, `vectortype`, `length`, `length_relative`, `length_range`, `radius`, `radius_relative`, `color`, `material`.
 

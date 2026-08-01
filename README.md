@@ -43,6 +43,29 @@ build_mex;
 
 This configures CMake, builds `polyscope_mex`, and copies the MEX binary into `src/matlab/+polyscope/private/`.
 
+## Package and deploy
+
+Treat `src/matlab/+polyscope` as the single source of truth. Generate a
+standalone runtime package (MATLAB wrappers plus the MEX binary) with:
+
+```matlab
+release_polyscope
+```
+
+The package is written to `dist/matlab/+polyscope`. To generate and
+synchronize an embedded copy in another project in one
+operation, pass the destination package directory:
+
+```matlab
+release_polyscope(SyncTarget= ...
+    "D:\OpenSeesMatlab\OpenSeesMatlab\OpenSeesMatlab\+plotter\+polyscope\vendor\+polyscope")
+```
+
+Synchronization replaces the complete destination package. It temporarily
+backs up an existing destination and restores it automatically if copying
+fails. A `POLYSCOPE_MATLAB_VERSION.txt` manifest records the source revision,
+dirty-worktree state, MATLAB release, and MEX extension.
+
 ### From the command line
 
 ```bash

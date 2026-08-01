@@ -1,6 +1,8 @@
 #include "matlab_data_utils.h"
 
 #include <sstream>
+#include <codecvt>
+#include <locale>
 
 namespace ps_mex {
 
@@ -19,10 +21,14 @@ std::string getString(const Array& arr) {
     if (strArr.getNumberOfElements() != 1) {
       throw std::runtime_error("Expected scalar string");
     }
-    return std::string(strArr[0]);
+    std::u16string utf16 = strArr[0];
+    std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> convert;
+    return convert.to_bytes(utf16);
   } else {
     matlab::data::CharArray charArr(arr);
-    return charArr.toAscii();
+    std::u16string utf16(charArr.begin(), charArr.end());
+    std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> convert;
+    return convert.to_bytes(utf16);
   }
 }
 

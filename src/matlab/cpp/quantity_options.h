@@ -24,6 +24,14 @@ inline glm::vec2 parseVec2(const Eigen::Vector2f& v) { return glm::vec2(v[0], v[
 
 inline glm::vec3 parseVec3(const Eigen::Vector3f& v) { return glm::vec3(v[0], v[1], v[2]); }
 
+inline glm::vec4 parseColor4(const matlab::data::Array& arr) {
+  auto v = getMatrixFloat(arr);
+  if (v.size() != 3 && v.size() != 4) {
+    throw std::runtime_error("Color must have 3 (RGB) or 4 (RGBA) components");
+  }
+  return glm::vec4(v(0), v(1), v(2), v.size() == 4 ? v(3) : 1.f);
+}
+
 inline std::pair<glm::vec3, glm::vec3> parseColorPair(const Eigen::MatrixXf& m) {
   if (m.rows() != 2 || m.cols() != 3) {
     throw std::runtime_error("Expected 2x3 matrix for color pair");
@@ -122,6 +130,22 @@ inline void applyScalarQuantityOptions(polyscope::ScalarQuantity<Q>& q, const Op
       auto v = getMatrixFloat(arr, 2);
       q.setOnscreenColorbarLocation(detail::parseVec2(v.row(0)));
     }
+  }
+
+  if (parser.has("onscreen_colorbar_background_color")) {
+    q.setOnscreenColorbarBackgroundColor(detail::parseColor4(parser.get("onscreen_colorbar_background_color")));
+  }
+  if (parser.has("onscreen_colorbar_tick_color")) {
+    q.setOnscreenColorbarTickColor(detail::parseColor4(parser.get("onscreen_colorbar_tick_color")));
+  }
+  if (parser.has("onscreen_colorbar_label_color")) {
+    q.setOnscreenColorbarLabelColor(detail::parseColor4(parser.get("onscreen_colorbar_label_color")));
+  }
+  if (parser.has("onscreen_colorbar_title_color")) {
+    q.setOnscreenColorbarTitleColor(detail::parseColor4(parser.get("onscreen_colorbar_title_color")));
+  }
+  if (parser.has("onscreen_colorbar_title")) {
+    q.setOnscreenColorbarTitle(parser.getString("onscreen_colorbar_title", ""));
   }
 
   if (parser.has("isolines_enabled")) {

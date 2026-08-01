@@ -58,6 +58,14 @@ classdef SurfaceMesh < handle
             call_mex('surface_mesh_set_transparency', obj.name, t);
         end
 
+        function set_back_face_policy(obj, val)
+            call_mex('surface_mesh_set_back_face_policy', obj.name, char(string(val)));
+        end
+
+        function set_back_face_color(obj, c)
+            call_mex('surface_mesh_set_back_face_color', obj.name, c);
+        end
+
         % === Quantities ===================================================
         function add_vertex_scalar_quantity(obj, qname, vals, varargin)
             call_mex('surface_mesh_add_vertex_scalar_quantity', obj.name, qname, vals, varargin{:});
