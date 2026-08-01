@@ -51,6 +51,10 @@ void bind_point_cloud_commands(CommandRegistry& reg) {
     } else {
       pc = polyscope::registerPointCloud2D<Eigen::MatrixXf>(name, pts);
     }
+    // MATLAB plotting APIs conventionally treat an RGB value as the final
+    // displayed colour. Use Polyscope's unlit flat material unless callers
+    // explicitly request another material below.
+    pc->setMaterial("flat");
 
     OptionsParser parser(inputs, 3, matlabPtr);
     if (parser.has("enabled")) pc->setEnabled(parser.getBool("enabled", true));

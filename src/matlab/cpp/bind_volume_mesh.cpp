@@ -21,6 +21,7 @@ polyscope::VolumeMesh* getVolumeMeshChecked(MATLABEngine* matlabPtr, const std::
 }
 
 void applyVolumeMeshOptions(polyscope::VolumeMesh* vm, const OptionsParser& parser) {
+  vm->setMaterial("flat");
   if (parser.has("enabled")) vm->setEnabled(parser.getBool("enabled", true));
   if (parser.has("color")) vm->setColor(detail::parseVec3(parser.getVec3("color", Eigen::Vector3f::Zero())));
   if (parser.has("interior_color"))

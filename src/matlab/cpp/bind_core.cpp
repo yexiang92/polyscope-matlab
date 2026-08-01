@@ -1003,6 +1003,39 @@ void bind_core_commands(CommandRegistry& reg) {
     getOutput(outputs, 0) = createVectorDouble(factory, {ray.x, ray.y, ray.z});
   });
 
+  reg.registerCommand("world_coords_to_screen", [](ArgumentList& outputs, ArgumentList& inputs,
+                                                     matlab::engine::MATLABEngine* matlabPtr) {
+    checkNArgs(matlabPtr, inputCount(inputs), 2);
+    Eigen::MatrixXf points = getMatrixFloat(getInput(inputs, 1));
+    if (points.cols() != 3) throwError(matlabPtr, "world coordinates must be an N-by-3 array");
+
+    auto [bufferWidth, bufferHeight] = polyscope::view::getBufferSize();
+    auto [windowWidth, windowHeight] = polyscope::view::getWindowSize();
+    glm::mat4 viewMat = polyscope::view::getCameraViewMatrix();
+    glm::mat4 projectionMat = polyscope::view::getCameraPerspectiveMatrix();
+    Eigen::MatrixXd out(points.rows(), 3);
+    const double sx = bufferWidth > 0 ? static_cast<double>(windowWidth) / bufferWidth : 1.0;
+    const double sy = bufferHeight > 0 ? static_cast<double>(windowHeight) / bufferHeight : 1.0;
+
+    for (Eigen::Index i = 0; i < points.rows(); ++i) {
+      glm::vec4 clip = projectionMat * viewMat * glm::vec4(points(i, 0), points(i, 1), points(i, 2), 1.f);
+      bool visible = clip.w > 0.f;
+      glm::vec3 ndc(0.f);
+      if (visible) {
+        ndc = glm::vec3(clip) / clip.w;
+        visible = ndc.x >= -1.f && ndc.x <= 1.f && ndc.y >= -1.f && ndc.y <= 1.f &&
+                  ndc.z >= -1.f && ndc.z <= 1.f;
+      }
+      const double bx = (static_cast<double>(ndc.x) + 1.0) * 0.5 * bufferWidth;
+      const double by = (static_cast<double>(ndc.y) + 1.0) * 0.5 * bufferHeight;
+      out(i, 0) = bx * sx;
+      out(i, 1) = (bufferHeight - by) * sy;
+      out(i, 2) = visible ? 1.0 : 0.0;
+    }
+    matlab::data::ArrayFactory factory;
+    getOutput(outputs, 0) = createMatrixDouble(factory, out);
+  });
+
   reg.registerCommand("set_camera_view_matrix", [](ArgumentList& outputs, ArgumentList& inputs,
                                                    matlab::engine::MATLABEngine* matlabPtr) {
     checkNArgs(matlabPtr, inputCount(inputs), 2);

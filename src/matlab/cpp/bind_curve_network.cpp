@@ -45,6 +45,7 @@ void bind_curve_network_commands(CommandRegistry& reg) {
     } else {
       cn = polyscope::registerCurveNetwork2D<Eigen::MatrixXf, Eigen::MatrixXi>(name, nodes, edges);
     }
+    cn->setMaterial("flat");
 
     OptionsParser parser(inputs, 4, matlabPtr);
     if (parser.has("enabled")) cn->setEnabled(parser.getBool("enabled", true));
@@ -71,6 +72,7 @@ void bind_curve_network_commands(CommandRegistry& reg) {
     polyscope::CurveNetwork* cn = (nodes.cols() == 3)
                                       ? polyscope::registerCurveNetworkLine<Eigen::MatrixXf>(name, nodes)
                                       : polyscope::registerCurveNetworkLine2D<Eigen::MatrixXf>(name, nodes);
+    cn->setMaterial("flat");
     OptionsParser parser(inputs, 3, matlabPtr);
     if (parser.has("enabled")) cn->setEnabled(parser.getBool("enabled", true));
     if (parser.has("radius")) cn->setRadius(parser.getDouble("radius", 1.0), true);
@@ -91,6 +93,7 @@ void bind_curve_network_commands(CommandRegistry& reg) {
     polyscope::CurveNetwork* cn = (nodes.cols() == 3)
                                       ? polyscope::registerCurveNetworkLoop<Eigen::MatrixXf>(name, nodes)
                                       : polyscope::registerCurveNetworkLoop2D<Eigen::MatrixXf>(name, nodes);
+    cn->setMaterial("flat");
     OptionsParser parser(inputs, 3, matlabPtr);
     if (parser.has("enabled")) cn->setEnabled(parser.getBool("enabled", true));
     if (parser.has("radius")) cn->setRadius(parser.getDouble("radius", 1.0), true);
@@ -111,6 +114,7 @@ void bind_curve_network_commands(CommandRegistry& reg) {
     polyscope::CurveNetwork* cn = (nodes.cols() == 3)
                                       ? polyscope::registerCurveNetworkSegments<Eigen::MatrixXf>(name, nodes)
                                       : polyscope::registerCurveNetworkSegments2D<Eigen::MatrixXf>(name, nodes);
+    cn->setMaterial("flat");
     OptionsParser parser(inputs, 3, matlabPtr);
     if (parser.has("enabled")) cn->setEnabled(parser.getBool("enabled", true));
     if (parser.has("radius")) cn->setRadius(parser.getDouble("radius", 1.0), true);

@@ -48,6 +48,7 @@ void bind_surface_mesh_commands(CommandRegistry& reg) {
     } else {
       sm = polyscope::registerSurfaceMesh2D<Eigen::MatrixXf, Eigen::MatrixXi>(name, verts, faces);
     }
+    sm->setMaterial("flat");
 
     OptionsParser parser(inputs, 4, matlabPtr);
     if (parser.has("enabled")) sm->setEnabled(parser.getBool("enabled", true));
