@@ -18,7 +18,7 @@ This repository contains **only** the MATLAB interface. The Polyscope C++ librar
 - A C++20 compiler (tested with Visual Studio 2022 on Windows; should work on Linux/macOS with GCC/Clang/Xcode).
 - Git with submodule support.
 
-The bindings are cross-platform: the same MATLAB source and C++ MEX code builds on Windows (`.mexw64`), Linux (`.mexa64`), and macOS (`.mexmaci64` / `.mexmaca64`). `build_mex.m` uses `mexext` to detect the correct MEX extension for the running MATLAB.
+The bindings are cross-platform: the same MATLAB source and C++ MEX code builds on Windows (`.mexw64`), Linux (`.mexa64`), and native Apple-silicon macOS (`.mexmaca64`). `build_mex.m` uses `mexext` to detect the correct MEX extension for the running MATLAB. Apple-silicon builds require MATLAB R2023b or newer.
 
 ## Clone
 
@@ -80,6 +80,23 @@ cmake -S . -B build_matlab_mex -DBUILD_MATLAB_BINDINGS=ON -DPOLYSCOPE_BACKEND_OP
 ```
 
 The MEX binary will be copied automatically to `src/matlab/+polyscope/private/` as a post-build step.
+
+## GitHub Actions artifacts
+
+Every workflow run builds the interactive GLFW backend and the headless mock
+backend, executes the MATLAB binding tests, and uploads one runtime package per
+platform:
+
+- `polyscope-matlab-windows-x86_64`
+- `polyscope-matlab-linux-x86_64`
+- `polyscope-matlab-macos-arm64`
+
+The macOS job uses an ARM64 GitHub-hosted runner and verifies that
+`polyscope_mex.mexmaca64` is an Apple-silicon Mach-O binary without Homebrew
+runtime paths. It targets macOS 12 or newer so the binary is not tied to the
+runner's newer macOS release. Each artifact contains one `.tar.gz` archive;
+extract it and copy its `+polyscope` directory into the consuming MATLAB
+toolbox.
 
 ## Usage
 

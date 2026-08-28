@@ -11,6 +11,7 @@ dist/
 # MATLAB MEX binaries copied into the package by the build
 src/matlab/+polyscope/private/*.mexw64
 src/matlab/+polyscope/private/*.mexmaci64
+src/matlab/+polyscope/private/*.mexmaca64
 src/matlab/+polyscope/private/*.mexa64
 
 # Generated state files

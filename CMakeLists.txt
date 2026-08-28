@@ -23,7 +23,7 @@ add_subdirectory(deps/polyscope)
 
 # == MATLAB MEX interface
 if (BUILD_MATLAB_BINDINGS)
-  find_package(Matlab)
+  find_package(Matlab REQUIRED)
   if(Matlab_FOUND)
     message(STATUS "MATLAB found at ${Matlab_ROOT_DIR}; building polyscope_mex")
 
@@ -61,6 +61,10 @@ if (BUILD_MATLAB_BINDINGS)
     target_include_directories(polyscope_mex PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/deps/polyscope/deps/stb")
     set_target_properties(polyscope_mex PROPERTIES CXX_VISIBILITY_PRESET "default")
 
+    if(APPLE)
+      message(STATUS "Building MATLAB MEX for macOS architecture: ${CMAKE_OSX_ARCHITECTURES}")
+    endif()
+
     # Copy the produced MEX binary next to the MATLAB package
     add_custom_command(
       TARGET polyscope_mex POST_BUILD
@@ -69,7 +73,5 @@ if (BUILD_MATLAB_BINDINGS)
           ${CMAKE_CURRENT_SOURCE_DIR}/src/matlab/+polyscope/private/$<TARGET_FILE_NAME:polyscope_mex>
       VERBATIM
     )
-  else()
-    message(STATUS "MATLAB not found; skipping polyscope_mex target")
   endif()
 endif() # BUILD_MATLAB_BINDINGS

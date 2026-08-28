@@ -1,4 +1,4 @@
-name: MATLAB Tests
+name: MATLAB MEX
 
 on:
   push:
@@ -7,52 +7,140 @@ on:
     branches: [master, main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  matlab-tests:
-    name: MATLAB MEX tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
         include:
-          - os: ubuntu-latest
-            cmake-flags: -DCMAKE_BUILD_TYPE=Release
-            build-config: Release
-          - os: windows-latest
-            cmake-flags: -G "Visual Studio 17 2022" -A x64
-            build-config: Release
-          - os: macos-latest
-            cmake-flags: -DCMAKE_BUILD_TYPE=Release
-            build-config: Release
+          - name: Windows x86-64
+            runner: windows-2022
+            platform: windows-x86_64
+            matlab-release: R2025b
+            mex-extension: mexw64
+          - name: Linux x86-64
+            runner: ubuntu-24.04
+            platform: linux-x86_64
+            matlab-release: R2025b
+            mex-extension: mexa64
+          - name: macOS Apple silicon
+            runner: macos-15
+            platform: macos-arm64
+            matlab-release: R2025b
+            mex-extension: mexmaca64
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Check out repository and submodules
+        uses: actions/checkout@v6
         with:
           submodules: recursive
+          fetch-depth: 1
 
       - name: Set up MATLAB
         id: setup-matlab
-        uses: matlab-actions/setup-matlab@v2
+        uses: matlab-actions/setup-matlab@v3
         with:
-          release: R2023a
+          release: ${{ matrix.matlab-release }}
 
       - name: Configure CMake
         shell: bash
+        env:
+          MATLAB_ROOT: ${{ steps.setup-matlab.outputs.matlabroot }}
         run: |
-          cmake -S . -B build_matlab_mex \
-            -DBUILD_MATLAB_BINDINGS=ON \
-            -DPOLYSCOPE_BACKEND_OPENGL3_GLFW=OFF \
-            -DMatlab_ROOT_DIR="${{ steps.setup-matlab.outputs.matlabroot }}" \
-            ${{ matrix.cmake-flags }}
+          args=(
+            -S .
+            -B build_matlab_mex
+            -DBUILD_MATLAB_BINDINGS=ON
+            -DPOLYSCOPE_BACKEND_OPENGL3_GLFW=ON
+            -DPOLYSCOPE_BACKEND_OPENGL_MOCK=ON
+            -DPOLYSCOPE_BACKEND_OPENGL3_EGL=OFF
+            -DGLFW_BUILD_EXAMPLES=OFF
+            -DGLFW_BUILD_TESTS=OFF
+            -DGLFW_BUILD_DOCS=OFF
+            -DGLFW_INSTALL=OFF
+            "-DMatlab_ROOT_DIR=$MATLAB_ROOT"
+          )
+
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            args+=(-G "Visual Studio 17 2022" -A x64)
+          else
+            args+=(-DCMAKE_BUILD_TYPE=Release)
+          fi
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            test "$(uname -m)" = "arm64"
+            args+=(
+              -DCMAKE_OSX_ARCHITECTURES=arm64
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+            )
+          fi
+
+          cmake "${args[@]}"
 
       - name: Build MEX
         shell: bash
-        run: |
-          cmake --build build_matlab_mex --target polyscope_mex --config ${{ matrix.build-config }} -j4
+        run: >-
+          cmake --build build_matlab_mex
+          --target polyscope_mex
+          --config Release
+          --parallel 3
 
-      - name: Run headless MATLAB tests
-        uses: matlab-actions/run-command@v2
+      - name: Verify generated MEX
+        shell: bash
+        env:
+          MEX_FILE: src/matlab/+polyscope/private/polyscope_mex.${{ matrix.mex-extension }}
+        run: |
+          test -f "$MEX_FILE"
+          file "$MEX_FILE"
+
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            lipo -archs "$MEX_FILE" | grep -qw arm64
+            file "$MEX_FILE" | grep -q 'arm64'
+            if otool -L "$MEX_FILE" | grep -E '/(opt/homebrew|usr/local)/'; then
+              echo "The MEX file contains a non-portable Homebrew dependency." >&2
+              exit 1
+            fi
+            otool -L "$MEX_FILE"
+            vtool -show-build "$MEX_FILE"
+          fi
+
+      - name: Run headless MATLAB binding tests and stage runtime package
+        uses: matlab-actions/run-command@v3
         with:
-          command: run_all_tests_headless
+          command: >-
+            run_all_tests_headless;
+            release_polyscope(OutputRoot=fullfile(pwd,"dist","matlab"));
+
+      - name: Verify staged runtime package
+        shell: bash
+        env:
+          PACKAGE_DIR: dist/matlab/+polyscope
+          MEX_NAME: polyscope_mex.${{ matrix.mex-extension }}
+        run: |
+          test -f "$PACKAGE_DIR/private/$MEX_NAME"
+          test -f "$PACKAGE_DIR/private/call_mex.m"
+          test -f "$PACKAGE_DIR/Polyscope.m"
+          test -f "$PACKAGE_DIR/POLYSCOPE_MATLAB_VERSION.txt"
+
+          count="$(find "$PACKAGE_DIR/private" -maxdepth 1 -type f -name 'polyscope_mex.mex*' | wc -l | tr -d ' ')"
+          test "$count" = "1"
+
+      - name: Archive runtime package
+        shell: bash
+        run: >-
+          tar -C dist/matlab -czf
+          "dist/polyscope-matlab-${{ matrix.platform }}.tar.gz"
+          +polyscope
+
+      - name: Upload MATLAB runtime package
+        uses: actions/upload-artifact@v4
+        with:
+          name: polyscope-matlab-${{ matrix.platform }}
+          path: dist/polyscope-matlab-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+          retention-days: 30
