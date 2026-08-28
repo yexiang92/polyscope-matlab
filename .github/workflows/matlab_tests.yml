@@ -25,7 +25,7 @@ jobs:
             matlab-release: R2025b
             mex-extension: mexw64
           - name: Linux x86-64
-            runner: ubuntu-24.04
+            runner: ubuntu-22.04
             platform: linux-x86_64
             matlab-release: R2025b
             mex-extension: mexa64
