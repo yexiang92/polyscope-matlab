@@ -64,7 +64,7 @@ release_polyscope(SyncTarget= ...
 Synchronization replaces the complete destination package. It temporarily
 backs up an existing destination and restores it automatically if copying
 fails. A `POLYSCOPE_MATLAB_VERSION.txt` manifest records the source revision,
-dirty-worktree state, MATLAB release, and MEX extension.
+dirty-worktree state, and MATLAB release.
 
 ### From the command line
 
@@ -93,17 +93,29 @@ platform:
 The macOS job uses an ARM64 GitHub-hosted runner and verifies that
 `polyscope_mex.mexmaca64` is an Apple-silicon Mach-O binary without Homebrew
 runtime paths. It targets macOS 12 or newer so the binary is not tied to the
-runner's newer macOS release. Each artifact contains one `.tar.gz` archive;
-extract it and copy its `+polyscope` directory into the consuming MATLAB
-toolbox.
+runner's newer macOS release.
+
+After both jobs pass, Actions verifies that all MATLAB files are identical and
+combines the two binaries into one artifact named
+`polyscope-matlab-supported-platforms`. Its archive contains a single shared
+`+polyscope` package with both `private/polyscope_mex.mexw64` and
+`private/polyscope_mex.mexmaca64`. Extract it and place that `+polyscope`
+directory directly at:
+
+```text
+D:\OpenSeesMatlab\OpenSeesMatlab\OpenSeesMatlab\+plotter\+polyscope\vendor\+polyscope
+```
+
+MATLAB automatically loads the MEX extension for the current platform; no
+platform-selection MATLAB code is needed.
 
 ### Publish a GitHub Release
 
 Open **Actions → MATLAB MEX → Run workflow**. Enter a tag such as `v1.0.0`
 in **release_tag** and run it. After both platform builds and MATLAB binding
-tests pass, the workflow creates that GitHub Release and uploads the two
-platform archives separately. Leave **release_tag** empty when you only want
-to compile and test. Re-running an existing tag replaces its two assets.
+tests pass, the workflow creates that GitHub Release and uploads the single
+combined package. Leave **release_tag** empty when you only want to compile
+and test. Re-running an existing tag replaces the package asset.
 
 ## Usage
 

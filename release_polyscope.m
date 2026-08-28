@@ -1,7 +1,7 @@
 function packageDir = release_polyscope(options)
 %RELEASE_POLYSCOPE Build and optionally deploy the MATLAB runtime package.
 %   packageDir = RELEASE_POLYSCOPE() copies the public MATLAB wrappers and
-%   the platform MEX binary to dist/matlab/+polyscope.
+%   the available platform MEX binaries to dist/matlab/+polyscope.
 %
 %   RELEASE_POLYSCOPE(SyncTarget=targetDir) also mirrors the generated
 %   +polyscope directory to targetDir. targetDir must itself be named
@@ -126,7 +126,6 @@ function writeManifest_(packageDir, rootDir)
     fprintf(fileId, 'source_revision=%s\n', revision);
     fprintf(fileId, 'source_dirty=%d\n', sourceDirty);
     fprintf(fileId, 'matlab_release=%s\n', version('-release'));
-    fprintf(fileId, 'mex_extension=%s\n', mexext);
 end
 
 function pathOut = absolutePath_(pathIn)

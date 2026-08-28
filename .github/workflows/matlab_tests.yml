@@ -148,17 +148,16 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
-    needs: build-and-test
+    needs: assemble-package
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - name: Download tested platform packages
+      - name: Download unified tested package
         uses: actions/download-artifact@v8
         with:
-          pattern: polyscope-matlab-*
+          name: polyscope-matlab-supported-platforms
           path: release-assets
-          merge-multiple: true
 
       - name: Create or update release
         shell: bash
@@ -166,10 +165,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          mapfile -t assets < <(find release-assets -maxdepth 1 -type f -name '*.tar.gz' -print | sort)
-          test "${#assets[@]}" = "2"
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f -name '*.tar.gz' -print)
+          test "${#assets[@]}" = "1"
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete-asset "$RELEASE_TAG" \
+              polyscope-matlab-windows-x86_64.tar.gz \
+              --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+            gh release delete-asset "$RELEASE_TAG" \
+              polyscope-matlab-macos-arm64.tar.gz \
+              --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$RELEASE_TAG" "${assets[@]}" \
@@ -178,3 +183,54 @@ jobs:
               --title "$RELEASE_TAG" \
               --generate-notes
           fi
+
+  assemble-package:
+    name: Assemble shared MATLAB package
+    needs: build-and-test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download platform packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: polyscope-matlab-*
+          path: platform-packages
+          merge-multiple: true
+
+      - name: Verify shared files and combine MEX binaries
+        shell: bash
+        run: |
+          windows_archive="platform-packages/polyscope-matlab-windows-x86_64.tar.gz"
+          macos_archive="platform-packages/polyscope-matlab-macos-arm64.tar.gz"
+          test -f "$windows_archive"
+          test -f "$macos_archive"
+
+          mkdir -p unpack/windows unpack/macos unified
+          tar -xzf "$windows_archive" -C unpack/windows
+          tar -xzf "$macos_archive" -C unpack/macos
+
+          diff -qr --strip-trailing-cr \
+            --exclude='polyscope_mex.mexw64' \
+            --exclude='polyscope_mex.mexmaca64' \
+            unpack/windows/+polyscope \
+            unpack/macos/+polyscope
+
+          cp -a unpack/windows/+polyscope unified/+polyscope
+          cp unpack/macos/+polyscope/private/polyscope_mex.mexmaca64 \
+            unified/+polyscope/private/
+
+          test -f unified/+polyscope/private/polyscope_mex.mexw64
+          test -f unified/+polyscope/private/polyscope_mex.mexmaca64
+          count="$(find unified/+polyscope/private -maxdepth 1 -type f -name 'polyscope_mex.mex*' | wc -l | tr -d ' ')"
+          test "$count" = "2"
+
+          tar -C unified -czf \
+            polyscope-matlab-windows-x86_64-macos-arm64.tar.gz \
+            +polyscope
+
+      - name: Upload unified MATLAB package
+        uses: actions/upload-artifact@v7
+        with:
+          name: polyscope-matlab-supported-platforms
+          path: polyscope-matlab-windows-x86_64-macos-arm64.tar.gz
+          if-no-files-found: error
+          retention-days: 30
