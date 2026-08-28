@@ -598,7 +598,7 @@ void bind_implot_commands(CommandRegistry& reg) {
     ImVec2 pix_offset = toImVec2(getVec2(getInput(inputs, 4)));
     bool clamp = getScalarBool(getInput(inputs, 5));
     std::string text = getString(getInput(inputs, 6));
-    ImPlot::Annotation(x, y, col, pix_offset, clamp, text.c_str());
+    ImPlot::Annotation(x, y, col, pix_offset, clamp, "%s", text.c_str());
   });
 
   reg.registerCommand("implot_tag_x", [](ArgumentList& outputs, ArgumentList& inputs,
@@ -607,7 +607,7 @@ void bind_implot_commands(CommandRegistry& reg) {
     double x = getScalarDouble(getInput(inputs, 1));
     ImVec4 col = toImVec4(getVec4(getInput(inputs, 2)));
     std::string text = getString(getInput(inputs, 3));
-    ImPlot::TagX(x, col, text.c_str());
+    ImPlot::TagX(x, col, "%s", text.c_str());
   });
 
   reg.registerCommand("implot_tag_y", [](ArgumentList& outputs, ArgumentList& inputs,
@@ -616,7 +616,7 @@ void bind_implot_commands(CommandRegistry& reg) {
     double y = getScalarDouble(getInput(inputs, 1));
     ImVec4 col = toImVec4(getVec4(getInput(inputs, 2)));
     std::string text = getString(getInput(inputs, 3));
-    ImPlot::TagY(y, col, text.c_str());
+    ImPlot::TagY(y, col, "%s", text.c_str());
   });
 
   // === Axis management =====================================================

@@ -17,7 +17,14 @@
 #include "polyscope/weak_handle.h"
 #include <glm/glm.hpp>
 
+#ifdef __APPLE__
+#ifndef GL_SILENCE_DEPRECATION
+#define GL_SILENCE_DEPRECATION
+#endif
+#include <OpenGL/gl3.h>
+#else
 #include <glad/glad.h>
+#endif
 
 #include "stb_image_write.h"
 #include "stb_image.h"
