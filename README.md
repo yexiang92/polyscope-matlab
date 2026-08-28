@@ -15,10 +15,10 @@ This repository contains **only** the MATLAB interface. The Polyscope C++ librar
 
 - MATLAB R2018a or newer with the C++ MEX API (`MatlabDataArray` / `cppmex`).
 - CMake ≥ 3.15.
-- A C++20 compiler (tested with Visual Studio 2022 on Windows; should work on Linux/macOS with GCC/Clang/Xcode).
+- A C++20 compiler (tested with Visual Studio 2022 on Windows and Apple Clang on macOS).
 - Git with submodule support.
 
-The bindings are cross-platform: the same MATLAB source and C++ MEX code builds on Windows (`.mexw64`), Linux (`.mexa64`), and native Apple-silicon macOS (`.mexmaca64`). `build_mex.m` uses `mexext` to detect the correct MEX extension for the running MATLAB. Apple-silicon builds require MATLAB R2023b or newer.
+The supported release platforms are Windows x86-64 (`.mexw64`) and native Apple-silicon macOS (`.mexmaca64`). `build_mex.m` uses `mexext` to detect the correct MEX extension for the running MATLAB. Apple-silicon builds require MATLAB R2023b or newer.
 
 ## Clone
 
@@ -73,7 +73,7 @@ cmake -S . -B build_matlab_mex -DBUILD_MATLAB_BINDINGS=ON
 cmake --build build_matlab_mex --target polyscope_mex --config Release
 ```
 
-On macOS/Linux you may want to disable the GLFW backend if no display is available:
+On macOS you may want to disable the GLFW backend if no display is available:
 
 ```bash
 cmake -S . -B build_matlab_mex -DBUILD_MATLAB_BINDINGS=ON -DPOLYSCOPE_BACKEND_OPENGL3_GLFW=OFF
@@ -88,7 +88,6 @@ backend, executes the MATLAB binding tests, and uploads one runtime package per
 platform:
 
 - `polyscope-matlab-windows-x86_64`
-- `polyscope-matlab-linux-x86_64`
 - `polyscope-matlab-macos-arm64`
 
 The macOS job uses an ARM64 GitHub-hosted runner and verifies that
@@ -97,6 +96,14 @@ runtime paths. It targets macOS 12 or newer so the binary is not tied to the
 runner's newer macOS release. Each artifact contains one `.tar.gz` archive;
 extract it and copy its `+polyscope` directory into the consuming MATLAB
 toolbox.
+
+### Publish a GitHub Release
+
+Open **Actions → MATLAB MEX → Run workflow**. Enter a tag such as `v1.0.0`
+in **release_tag** and run it. After both platform builds and MATLAB binding
+tests pass, the workflow creates that GitHub Release and uploads the two
+platform archives separately. Leave **release_tag** empty when you only want
+to compile and test. Re-running an existing tag replaces its two assets.
 
 ## Usage
 

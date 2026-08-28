@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [master, main]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional tag (for example v1.0.0); when set, publish both tested packages to GitHub Release"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -24,11 +29,6 @@ jobs:
             platform: windows-x86_64
             matlab-release: R2025b
             mex-extension: mexw64
-          - name: Linux x86-64
-            runner: ubuntu-22.04
-            platform: linux-x86_64
-            matlab-release: R2025b
-            mex-extension: mexa64
           - name: macOS Apple silicon
             runner: macos-15
             platform: macos-arm64
@@ -41,19 +41,6 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 1
-
-      - name: Install Linux GLFW build dependencies
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends \
-            libx11-dev \
-            libxrandr-dev \
-            libxinerama-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libgl1-mesa-dev
 
       - name: Set up MATLAB
         id: setup-matlab
@@ -157,3 +144,37 @@ jobs:
           path: dist/polyscope-matlab-${{ matrix.platform }}.tar.gz
           if-no-files-found: error
           retention-days: 30
+
+  publish-release:
+    name: Publish GitHub Release
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    needs: build-and-test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download tested platform packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: polyscope-matlab-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create or update release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f -name '*.tar.gz' -print | sort)
+          test "${#assets[@]}" = "2"
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TAG" \
+              --generate-notes
+          fi
