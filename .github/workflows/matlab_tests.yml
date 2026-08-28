@@ -52,7 +52,8 @@ jobs:
             libxrandr-dev \
             libxinerama-dev \
             libxcursor-dev \
-            libxi-dev
+            libxi-dev \
+            libgl1-mesa-dev
 
       - name: Set up MATLAB
         id: setup-matlab
@@ -150,7 +151,7 @@ jobs:
           +polyscope
 
       - name: Upload MATLAB runtime package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: polyscope-matlab-${{ matrix.platform }}
           path: dist/polyscope-matlab-${{ matrix.platform }}.tar.gz
