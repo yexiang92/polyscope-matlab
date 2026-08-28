@@ -214,8 +214,8 @@ jobs:
             unpack/windows/+polyscope \
             unpack/macos/+polyscope
 
-          cp -a unpack/windows/+polyscope unified/+polyscope
-          cp unpack/macos/+polyscope/private/polyscope_mex.mexmaca64 \
+          cp -a unpack/macos/+polyscope unified/+polyscope
+          cp unpack/windows/+polyscope/private/polyscope_mex.mexw64 \
             unified/+polyscope/private/
 
           test -f unified/+polyscope/private/polyscope_mex.mexw64
